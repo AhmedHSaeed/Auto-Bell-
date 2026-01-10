@@ -1,47 +1,38 @@
-#include <LiquidCrystal_I2C.h>  // I2C LCD Library
+#include <LiquidCrystal_I2C.h>
 #include <EEPROM.h>
-#include <ThreeWire.h>          // DS1302
+#include <ThreeWire.h>
 #include <RtcDS1302.h>
 
-// LCD I2C configuration
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // Try 0x3F if 0x27 doesn't work
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// DS1302 RTC pins
-#define RTC_CLK 5    // Clock pin
-#define RTC_DAT 4    // Data pin  
-#define RTC_RST 2    // Reset pin
+#define RTC_CLK 5
+#define RTC_DAT 4
+#define RTC_RST 2
 
-// Button pins
 #define bt_set  A0
 #define bt_next A1
 #define bt_up   A2
 #define bt_down A3
 
-// Relay and Buzzer pins
-#define relay 8      // Relay for bell (school bell)
-#define buzzer 6     // Buzzer for button feedback
+#define relay 8
+#define buzzer 6
 
-// LED indicators
-#define led_active 9    // Green LED - System active
-#define led_bell   10   // Red LED - Bell ringing
+#define led_active 9
+#define led_bell   10
 
-// Create DS1302 object
 ThreeWire myWire(RTC_DAT, RTC_CLK, RTC_RST);
 RtcDS1302<ThreeWire> Rtc(myWire);
 
-// EEPROM Structure
 #define EEPROM_INIT_FLAG 0
 #define BELL_DURATION_ADDR 10
 #define WEEKEND_DAY_ADDR 11
 #define ALARM_COUNT_ADDR 12
 #define ALARM_DATA_START 50
 
-// Constants
 #define MAX_ALARMS 30
 #define MAX_BELL_DURATION 99
 #define MIN_BELL_DURATION 1
 
-// Variables
 int hh = 0, mm = 0, ss = 0, set_day = 0;
 int bell_duration = 3;
 int weekend = 6;
@@ -63,41 +54,32 @@ unsigned long last_button_time = 0;
 unsigned long last_rtc_update = 0;
 unsigned long last_display_update = 0;
 
-// ======== FIXED RELAY LOGIC ========
 bool bellActive = false;
 unsigned long bellStart = 0;
 int lastBellMinute = -1;
-// ===================================
 
-// Alarm tracking
 bool alarms_triggered_today[MAX_ALARMS] = {false};
 int last_checked_day = -1;
 
-// Day names - FIXED: Proper order for DS1302
-// DS1302: 1=Sunday, 2=Monday, 3=Tuesday, 4=Wednesday, 5=Thursday, 6=Friday, 7=Saturday
 String day_names[] = {"", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 void setup() {
   Serial.begin(9600);
-  Serial.println(F("Auto Bell"));
+  Serial.println(F("System Starting"));
   
-  // Initialize LEDs
   pinMode(led_active, OUTPUT);
   pinMode(led_bell, OUTPUT);
   digitalWrite(led_active, HIGH);
   digitalWrite(led_bell, LOW);
   
-  // Initialize LCD
   lcd.init();
   lcd.backlight();
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print(F("Auto Bell"));
+  lcd.print(F("School Bell System"));
   lcd.setCursor(0, 1);
-  lcd.print(F("Top Students"));
+  lcd.print(F("Initializing..."));
   
-  
-  // Initialize RTC
   Rtc.Begin();
   
   if (!Rtc.GetIsRunning()) {
@@ -109,36 +91,30 @@ void setup() {
     Rtc.SetIsWriteProtected(false);
   }
   
-  // Set RTC to compile time if needed
   RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
   RtcDateTime now = Rtc.GetDateTime();
   
   if (!now.IsValid() || now.Year() < 2023) {
-    Serial.println(F("RTC not set or invalid. Setting to compile time."));
+    Serial.println(F("RTC not set. Using compile time."));
     Rtc.SetDateTime(compiled);
   }
   
-  // Initialize buttons
   pinMode(bt_set, INPUT_PULLUP);
   pinMode(bt_next, INPUT_PULLUP);
   pinMode(bt_up, INPUT_PULLUP);
   pinMode(bt_down, INPUT_PULLUP);
   
-  // Initialize relay and buzzer
   pinMode(relay, OUTPUT);
   pinMode(buzzer, OUTPUT);
   digitalWrite(relay, LOW);
   digitalWrite(buzzer, LOW);
   
-  // Initialize EEPROM
   initializeEEPROM();
   
-  // Read settings
   bell_duration = EEPROM.read(BELL_DURATION_ADDR);
   weekend = EEPROM.read(WEEKEND_DAY_ADDR);
   total_alarms = EEPROM.read(ALARM_COUNT_ADDR);
   
-  // Validate settings
   if (bell_duration < MIN_BELL_DURATION || bell_duration > MAX_BELL_DURATION) {
     bell_duration = 3;
     EEPROM.write(BELL_DURATION_ADDR, bell_duration);
@@ -166,7 +142,6 @@ void setup() {
   delay(1000);
   lcd.clear();
   
-  // Get initial time and day
   updateTimeFromRTC();
   last_checked_day = set_day;
   findNextBell();
@@ -184,19 +159,15 @@ void setup() {
 void loop() {
   unsigned long current_millis = millis();
   
-  // Update RTC time every second
   if (current_millis - last_rtc_update >= 1000) {
     last_rtc_update = current_millis;
     updateTimeFromRTC();
     
-    // Check for alarms (only on non-weekend days)
     if (!isWeekend(set_day)) {
       checkForAlarms();
     }
   }
   
-  // ======== FIXED RELAY CONTROL ========
-  // ---- START BELL (moment of match only) ----
   if (!bellActive && !isWeekend(set_day)) {
     for (int i = 0; i < total_alarms; i++) {
       int check_hour, check_minute;
@@ -205,11 +176,9 @@ void loop() {
       if (check_hour == hh && check_minute == mm && 
           !alarms_triggered_today[i] && lastBellMinute != mm) {
         
-        // Mark alarm as triggered
         alarms_triggered_today[i] = true;
         lastBellMinute = mm;
         
-        // Activate bell
         digitalWrite(relay, HIGH);
         digitalWrite(led_bell, HIGH);
         bellStart = current_millis;
@@ -226,20 +195,17 @@ void loop() {
         Serial.print(bell_duration);
         Serial.println(F(" seconds"));
         
-        // Audible feedback
         digitalWrite(buzzer, HIGH);
         delay(200);
         digitalWrite(buzzer, LOW);
         
-        // Update next bell
         findNextBell();
         
-        break; // Only trigger one alarm
+        break;
       }
     }
   }
   
-  // ---- STOP BELL AFTER DURATION ----
   if (bellActive && current_millis - bellStart >= (unsigned long)(bell_duration * 1000)) {
     digitalWrite(relay, LOW);
     digitalWrite(led_bell, LOW);
@@ -249,15 +215,11 @@ void loop() {
     Serial.print(bell_duration);
     Serial.println(F(" seconds"));
     
-    // Small delay to ensure relay is off
     delay(50);
   }
-  // ===================================
   
-  // Handle buttons
   handleButtons();
   
-  // Handle cursor blinking in settings modes
   if (setMode > 0) {
     if (current_millis - cursor_blink_time >= 500) {
       cursor_blink_time = current_millis;
@@ -267,7 +229,6 @@ void loop() {
     show_cursor = false;
   }
   
-  // Update display
   if (current_millis - last_display_update >= 250) {
     updateDisplay();
     last_display_update = current_millis;
@@ -276,7 +237,6 @@ void loop() {
   delay(10);
 }
 
-// FIXED: Correct day of week calculation for DS1302
 void updateTimeFromRTC() {
   RtcDateTime now = Rtc.GetDateTime();
   
@@ -290,13 +250,10 @@ void updateTimeFromRTC() {
     mm = now.Minute();
     hh = now.Hour();
     
-    // FIXED: DS1302 has built-in day of week function
-    int dow = now.DayOfWeek();  // Get day of week from RTC (0-6)
+    int dow = now.DayOfWeek();
     
-    // Convert to our format: 1=Sunday, 2=Monday, ..., 7=Saturday
     set_day = dow + 1;
     
-    // Reset triggered alarms if day changed
     if (old_day != set_day) {
       for (int i = 0; i < MAX_ALARMS; i++) {
         alarms_triggered_today[i] = false;
@@ -312,10 +269,7 @@ void updateTimeFromRTC() {
   }
 }
 
-// Simplified - relay logic is now in main loop
 void checkForAlarms() {
-  // This function is now just for finding next bell
-  // Actual bell triggering is in the main loop with the fixed logic
 }
 
 void handleButtons() {
@@ -331,7 +285,6 @@ void handleButtons() {
   
   unsigned long current_millis = millis();
   
-  // SET button - Mode selection
   if (btn_set == LOW && btn_set_prev == HIGH && (current_millis - last_button_time > 300)) {
     buttonBeep();
     last_button_time = current_millis;
@@ -340,7 +293,6 @@ void handleButtons() {
     field = 0;
     lcd.noBlink();
     
-    // Initialize alarm mode
     if (setMode == 3) {
       current_alarm = 1;
       if (total_alarms > 0) {
@@ -355,7 +307,6 @@ void handleButtons() {
   }
   btn_set_prev = btn_set;
   
-  // NEXT button
   if (btn_next == LOW && btn_next_prev == HIGH && (current_millis - last_button_time > 300)) {
     buttonBeep();
     last_button_time = current_millis;
@@ -367,22 +318,18 @@ void handleButtons() {
       field = (field + 1) % 3;
       
       if (field == 0) {
-        // Save current alarm
         saveAlarm(current_alarm - 1, alarm_hour, alarm_minute);
         
-        // Move to next alarm
         current_alarm++;
         if (current_alarm > MAX_ALARMS) {
           current_alarm = 1;
         }
         
-        // Update total if needed
         if (current_alarm > total_alarms) {
           total_alarms = current_alarm;
           EEPROM.write(ALARM_COUNT_ADDR, total_alarms);
         }
         
-        // Read next alarm
         if (current_alarm <= total_alarms) {
           readAlarm(current_alarm - 1, alarm_hour, alarm_minute);
         } else {
@@ -390,7 +337,6 @@ void handleButtons() {
           alarm_minute = 0;
         }
         
-        // Show confirmation
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print(F("Alarm Saved"));
@@ -400,20 +346,18 @@ void handleButtons() {
         delay(800);
         lcd.clear();
         
-        // Update next bell
         findNextBell();
       }
     }
   }
   btn_next_prev = btn_next;
   
-  // UP button - MANUAL DAY SETTING
   if (btn_up == LOW && btn_up_prev == HIGH && (current_millis - last_button_time > 200)) {
     buttonBeep();
     last_button_time = current_millis;
     
     switch (setMode) {
-      case 0: // In normal mode, press UP to manually advance day (for testing)
+      case 0:
         set_day++;
         if (set_day > 7) set_day = 1;
         Serial.print(F("Manual day change to: "));
@@ -421,7 +365,7 @@ void handleButtons() {
         findNextBell();
         break;
         
-      case 1: // Set Time
+      case 1:
         if (field == 0) {
           hh = (hh + 1) % 24;
         } else {
@@ -431,7 +375,7 @@ void handleButtons() {
         findNextBell();
         break;
         
-      case 2: // Set Bell Duration
+      case 2:
         bell_duration++;
         if (bell_duration > MAX_BELL_DURATION) bell_duration = MIN_BELL_DURATION;
         EEPROM.write(BELL_DURATION_ADDR, bell_duration);
@@ -440,7 +384,7 @@ void handleButtons() {
         Serial.println(F("s"));
         break;
         
-      case 3: // Set Alarm
+      case 3:
         if (field == 0) {
           current_alarm++;
           if (current_alarm > MAX_ALARMS) current_alarm = 1;
@@ -457,7 +401,7 @@ void handleButtons() {
         }
         break;
         
-      case 4: // Set Weekend
+      case 4:
         weekend++;
         if (weekend > 7) weekend = 1;
         EEPROM.write(WEEKEND_DAY_ADDR, weekend);
@@ -469,13 +413,12 @@ void handleButtons() {
   }
   btn_up_prev = btn_up;
   
-  // DOWN button - MANUAL DAY SETTING
   if (btn_down == LOW && btn_down_prev == HIGH && (current_millis - last_button_time > 200)) {
     buttonBeep();
     last_button_time = current_millis;
     
     switch (setMode) {
-      case 0: // In normal mode, press DOWN to manually go back day (for testing)
+      case 0:
         set_day--;
         if (set_day < 1) set_day = 7;
         Serial.print(F("Manual day change to: "));
@@ -483,7 +426,7 @@ void handleButtons() {
         findNextBell();
         break;
         
-      case 1: // Set Time
+      case 1:
         if (field == 0) {
           hh--;
           if (hh < 0) hh = 23;
@@ -495,7 +438,7 @@ void handleButtons() {
         findNextBell();
         break;
         
-      case 2: // Set Bell Duration
+      case 2:
         bell_duration--;
         if (bell_duration < MIN_BELL_DURATION) bell_duration = MAX_BELL_DURATION;
         EEPROM.write(BELL_DURATION_ADDR, bell_duration);
@@ -504,7 +447,7 @@ void handleButtons() {
         Serial.println(F("s"));
         break;
         
-      case 3: // Set Alarm
+      case 3:
         if (field == 0) {
           current_alarm--;
           if (current_alarm < 1) current_alarm = MAX_ALARMS;
@@ -523,7 +466,7 @@ void handleButtons() {
         }
         break;
         
-      case 4: // Set Weekend
+      case 4:
         weekend--;
         if (weekend < 1) weekend = 7;
         EEPROM.write(WEEKEND_DAY_ADDR, weekend);
@@ -535,7 +478,6 @@ void handleButtons() {
   }
   btn_down_prev = btn_down;
   
-  // RESET ALARMS: Press and hold SET + NEXT for 5 seconds
   static unsigned long reset_start_time = 0;
   if (btn_set == LOW && btn_next == LOW) {
     if (reset_start_time == 0) {
@@ -550,13 +492,11 @@ void handleButtons() {
 }
 
 void updateDisplay() {
-  lcd.noBlink();  // Turn off blink initially
+  lcd.noBlink();
   
   if (setMode == 0) {
-    // Normal display mode
     lcd.setCursor(0, 0);
     
-    // Day and Weekend indicator
     lcd.print(day_names[set_day]);
     if (isWeekend(set_day)) {
       lcd.print(" W");
@@ -564,7 +504,6 @@ void updateDisplay() {
       lcd.print("  ");
     }
     
-    // Time
     lcd.setCursor(8, 0);
     if (hh < 10) lcd.print("0");
     lcd.print(hh);
@@ -575,7 +514,6 @@ void updateDisplay() {
     if (ss < 10) lcd.print("0");
     lcd.print(ss);
     
-    // Line 2: Status
     lcd.setCursor(0, 1);
     if (bellActive) {
       unsigned long elapsed = millis() - bellStart;
@@ -599,13 +537,11 @@ void updateDisplay() {
     }
   } 
   else if (setMode == 1) {
-    // Set Time
     lcd.setCursor(0, 0);
     lcd.print("SET TIME       ");
     
     lcd.setCursor(0, 1);
     
-    // Hour
     if (field == 0 && show_cursor) {
       lcd.print("__");
     } else {
@@ -615,7 +551,6 @@ void updateDisplay() {
     
     lcd.print(":");
     
-    // Minute
     if (field == 1 && show_cursor) {
       lcd.print("__");
     } else {
@@ -627,14 +562,12 @@ void updateDisplay() {
     if (ss < 10) lcd.print("0");
     lcd.print(ss);
     
-    // Show cursor position
     if (show_cursor) {
       lcd.setCursor(field * 3, 1);
       lcd.blink();
     }
   }
   else if (setMode == 2) {
-    // Set Bell Duration
     lcd.setCursor(0, 0);
     lcd.print("BELL DURATION  ");
     lcd.setCursor(0, 1);
@@ -651,7 +584,6 @@ void updateDisplay() {
     }
   }
   else if (setMode == 3) {
-    // Set Alarms
     lcd.setCursor(0, 0);
     lcd.print("Alarm#");
     lcd.print(current_alarm);
@@ -689,7 +621,6 @@ void updateDisplay() {
       }
     }
     
-    // Show full time on right
     lcd.setCursor(10, 1);
     if (alarm_hour < 10) lcd.print("0");
     lcd.print(alarm_hour);
@@ -697,14 +628,12 @@ void updateDisplay() {
     if (alarm_minute < 10) lcd.print("0");
     lcd.print(alarm_minute);
     
-    // Show cursor
     if (show_cursor) {
       lcd.setCursor(4, 1);
       lcd.blink();
     }
   }
   else if (setMode == 4) {
-    // Set Weekend
     lcd.setCursor(0, 0);
     lcd.print("SET WEEKEND    ");
     lcd.setCursor(0, 1);
@@ -774,7 +703,6 @@ void readAlarm(int index, int &hour, int &minute) {
 void findNextBell() {
   next_bell_found = false;
   
-  // Check if today is weekend - NO BELLS ON WEEKENDS
   if (isWeekend(set_day)) {
     Serial.print(F("Today is "));
     Serial.print(day_names[set_day]);
@@ -786,12 +714,10 @@ void findNextBell() {
     return;
   }
   
-  // Check all alarms to find the next one
   for (int i = 0; i < total_alarms; i++) {
     int check_hour, check_minute;
     readAlarm(i, check_hour, check_minute);
     
-    // Check if this alarm is in future OR if it's current time but not triggered
     bool is_future = (check_hour > hh) || (check_hour == hh && check_minute > mm);
     bool is_current_untriggered = (check_hour == hh && check_minute == mm && !alarms_triggered_today[i]);
     
@@ -809,7 +735,6 @@ void findNextBell() {
     }
   }
   
-  // If no more alarms today, check first alarm tomorrow
   if (total_alarms > 0) {
     readAlarm(0, next_bell_hour, next_bell_minute);
     next_bell_found = true;
@@ -818,25 +743,18 @@ void findNextBell() {
 }
 
 bool isWeekend(int day) {
-  // Proper weekend checking
   if (weekend == 6) {
-    // Friday = 6, Saturday = 7 are weekends
     return (day == 6 || day == 7);
   } else {
-    // Only the selected day is weekend
     return (day == weekend);
   }
 }
 
-// FIXED: Set RTC with correct day of week
 void setRTCTime() {
   RtcDateTime now = Rtc.GetDateTime();
   
-  // Create new time with current date but updated time
   RtcDateTime new_time(now.Year(), now.Month(), now.Day(), hh, mm, ss);
   
-  // IMPORTANT: The day of week is automatically calculated by RTC library
-  // when we create RtcDateTime object
   Rtc.SetDateTime(new_time);
   
   Serial.print(F("RTC set to: "));
@@ -860,21 +778,17 @@ void quickBellTest() {
   lcd.setCursor(0, 0);
   lcd.print(F("Testing..."));
   
-  // Ensure relay is off
   digitalWrite(relay, LOW);
   delay(100);
   
-  // Turn on relay
   digitalWrite(relay, HIGH);
   digitalWrite(led_bell, HIGH);
   digitalWrite(buzzer, HIGH);
   delay(200);
   digitalWrite(buzzer, LOW);
   
-  // Keep relay on for 3 seconds
   delay(3000);
   
-  // Turn off relay
   digitalWrite(relay, LOW);
   digitalWrite(led_bell, LOW);
   
@@ -895,18 +809,15 @@ void resetAllAlarms() {
     EEPROM.write(ALARM_DATA_START + i, 0);
   }
   
-  // Reset triggered alarms
   for (int i = 0; i < MAX_ALARMS; i++) {
     alarms_triggered_today[i] = false;
   }
   
-  // Reset bell tracking
   bellActive = false;
   lastBellMinute = -1;
   digitalWrite(relay, LOW);
   digitalWrite(led_bell, LOW);
   
-  // Feedback
   for (int i = 0; i < 3; i++) {
     digitalWrite(buzzer, HIGH);
     digitalWrite(led_bell, HIGH);
